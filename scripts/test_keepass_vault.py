@@ -38,11 +38,14 @@ class KeepassVaultTests(unittest.TestCase):
 
     @patch("keepass_vault.subprocess.run")
     def test_list_uses_supported_keepassxc_flags(self, run):
-        run.side_effect = [FakeCompleted("Mail/Example\n"), FakeCompleted("UUID: 12345678-1234-1234-1234-123456789abc\n"), FakeCompleted("Current TOTP: 123456\n")]
+        run.side_effect = [FakeCompleted("Mail/Example\n")]
         result = Cli(self.settings, "master").list_entries()
         self.assertEqual(result[0]["path"], "Mail/Example")
+        self.assertIsNone(result[0]["uuid"])
+        self.assertIsNone(result[0]["has_totp"])
+        self.assertEqual(run.call_count, 1)
         command = run.call_args_list[0].args[0]
-        self.assertEqual(command[2:5], ["ls", "-R", "-f"])
+        self.assertEqual(command[1:5], ["ls", "-q", "-R", "-f"])
 
     @patch("keepass_vault.subprocess.run")
     def test_delete_requires_confirmation(self, run):

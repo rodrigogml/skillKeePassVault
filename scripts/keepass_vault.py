@@ -158,7 +158,10 @@ class Cli:
         command = [self.settings.cli_path]
         if self.key_file:
             command.extend(["--key-file", self.key_file])
-        command.extend(args)
+        if args and args[0] in {"add", "edit", "ls", "rm", "show"}:
+            command.extend([args[0], "-q", *args[1:]])
+        else:
+            command.extend(args)
         try:
             result = subprocess.run(
                 command, input=self.password + "\n" + extra_input, text=True,
@@ -196,16 +199,7 @@ class Cli:
             path = line.strip()
             if not path or path.endswith("/") or path.lower().startswith("total"):
                 continue
-            detail = self.command(["show", self.settings.database_path, path])
-            uuid_match = re.search(r"\bUUID\s*:\s*([0-9a-fA-F-]{36})", detail)
-            try:
-                self.command(["show", "--totp", self.settings.database_path, path])
-                has_totp = True
-            except VaultError as exc:
-                if exc.code != "cli_error":
-                    raise
-                has_totp = False
-            entries.append({"path": path, "uuid": uuid_match.group(1) if uuid_match else None, "has_totp": has_totp})
+            entries.append({"path": path, "uuid": None, "has_totp": None})
         return entries
 
     def add_or_edit(self, operation: str, request: Mapping[str, Any]) -> None:
