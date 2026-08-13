@@ -26,6 +26,7 @@ class KeepassVaultTests(unittest.TestCase):
         result = handle({"operation": "read", "entry": {"path": "Mail/Example"}, "field": "username", "auth": {"mode": "stdin", "password": "master"}}, self.settings)
         self.assertEqual(result["value"], "alice")
         self.assertEqual(run.call_args.kwargs["input"], "master\n")
+        self.assertNotIn("--pw-stdin", run.call_args.args[0])
 
     @patch("keepass_vault.subprocess.run")
     def test_password_read_requests_protected_attribute(self, run):
@@ -34,6 +35,14 @@ class KeepassVaultTests(unittest.TestCase):
         self.assertEqual(result["value"], "secret")
         command = run.call_args.args[0]
         self.assertIn("--show-protected", command)
+
+    @patch("keepass_vault.subprocess.run")
+    def test_list_uses_supported_keepassxc_flags(self, run):
+        run.side_effect = [FakeCompleted("Mail/Example\n"), FakeCompleted("UUID: 12345678-1234-1234-1234-123456789abc\n"), FakeCompleted("Current TOTP: 123456\n")]
+        result = Cli(self.settings, "master").list_entries()
+        self.assertEqual(result[0]["path"], "Mail/Example")
+        command = run.call_args_list[0].args[0]
+        self.assertEqual(command[2:5], ["ls", "-R", "-f"])
 
     @patch("keepass_vault.subprocess.run")
     def test_delete_requires_confirmation(self, run):

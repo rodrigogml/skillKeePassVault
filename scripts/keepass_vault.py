@@ -158,7 +158,7 @@ class Cli:
         command = [self.settings.cli_path]
         if self.key_file:
             command.extend(["--key-file", self.key_file])
-        command.extend(["--pw-stdin", *args])
+        command.extend(args)
         try:
             result = subprocess.run(
                 command, input=self.password + "\n" + extra_input, text=True,
@@ -190,7 +190,7 @@ class Cli:
         return self.command([*options, "-a", field, self.settings.database_path, path]).rstrip("\r\n")
 
     def list_entries(self) -> list[dict[str, Any]]:
-        output = self.command(["ls", "--recursive", "--flatten", self.settings.database_path])
+        output = self.command(["ls", "-R", "-f", self.settings.database_path])
         entries = []
         for line in output.splitlines():
             path = line.strip()
