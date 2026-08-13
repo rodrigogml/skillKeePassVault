@@ -8,6 +8,8 @@ python scripts/keepass_vault.py --config profiles/personal.ini < request.json
 
 Cada processo recebe uma requisição e retorna uma resposta.
 
+`version` é obrigatória e deve ser `1`. Outras versões retornam `unsupported_version`.
+
 ## Configuração
 
 Gere e valide o arquivo com a ferramenta fornecida:

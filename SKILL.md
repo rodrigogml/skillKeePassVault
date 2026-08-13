@@ -5,7 +5,7 @@ description: Read and modify KeePassXC password vault entries through the bundle
 
 # KeePass Vault
 
-Use `scripts/keepass_vault.py` as the only interface to the vault. Pass one project-specific INI file with `--config` and one JSON request on stdin. The script writes exactly one JSON response to stdout; diagnostic output goes to stderr and never includes secret values.
+Use `scripts/keepass_vault.py` as the only interface to the vault. Pass one project-specific INI file with `--config` and one JSON request containing `version: 1` on stdin. The script writes exactly one JSON response to stdout; diagnostic output goes to stderr and never includes secret values.
 
 Use `scripts/config_tool.py` to create and validate configuration files. Always generate a model instead of writing the INI from memory:
 

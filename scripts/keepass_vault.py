@@ -18,6 +18,7 @@ from typing import Any, Mapping, Sequence
 
 FIELDS = {"title", "username", "password", "url", "notes"}
 READ_FIELDS = FIELDS | {"totp"}
+CONTRACT_VERSION = 1
 UNSUPPORTED = {"clone", "attribute", "attributes", "custom_attribute"}
 CONFIG_KEYS = {"cli_path", "database_path", "timeout_seconds"}
 
@@ -176,11 +177,13 @@ class Cli:
     def show(self, path: str, field: str) -> str:
         if field == "totp":
             output = self.command(["show", "-t", self.settings.database_path, path])
-            match = re.search(r"(?:TOTP|Current TOTP)\s*:\s*(\S+)", output, re.IGNORECASE)
+            match = re.fullmatch(r"\s*(?:TOTP|Current TOTP)\s*:\s*([0-9A-Z]{5,10})\s*", output, re.IGNORECASE)
             if match:
                 return match.group(1)
-            lines = [line.strip() for line in output.splitlines() if line.strip()]
-            return lines[-1] if lines else ""
+            match = re.fullmatch(r"\s*([0-9A-Z]{5,10})\s*", output, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            fail("totp_not_found", "Não foi possível identificar um código TOTP na resposta do keepassxc-cli.")
         options = ["show"]
         if field == "password":
             options.append("--show-protected")
@@ -254,6 +257,8 @@ def handle(request: Mapping[str, Any], settings: Settings) -> dict[str, Any]:
         return {"entry": entry_path(request), "operation": operation, "deleted": True}
     if operation == "copy":
         field = field_name(request)
+        if field not in FIELDS:
+            fail("invalid_field", "copy aceita somente campos graváveis: notes, password, title, url ou username.")
         source = entry_path(request, "source")
         destination = entry_path(request, "destination")
         value = cli.show(source, field)
@@ -270,9 +275,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         request = json.load(sys.stdin)
         if not isinstance(request, Mapping):
             fail("invalid_json", "A requisição JSON deve ser um objeto.")
+        if request.get("version") != CONTRACT_VERSION:
+            fail("unsupported_version", f"version deve ser {CONTRACT_VERSION}.")
         settings = load_settings(args.config)
         data = handle(request, settings)
-        print(json.dumps({"version": request.get("version", 1), "ok": True, "operation": request.get("operation"), "data": data}, ensure_ascii=False))
+        print(json.dumps({"version": CONTRACT_VERSION, "ok": True, "operation": request.get("operation"), "data": data}, ensure_ascii=False))
         return 0
     except json.JSONDecodeError:
         error = {"code": "invalid_json", "message": "A entrada não contém JSON válido."}
@@ -280,7 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         error = {"code": exc.code, "message": exc.message}
     except Exception:
         error = {"code": "internal_error", "message": "Falha interna ao processar a solicitação."}
-    print(json.dumps({"version": 1, "ok": False, "error": error}, ensure_ascii=False))
+    print(json.dumps({"version": CONTRACT_VERSION, "ok": False, "error": error}, ensure_ascii=False))
     return 1
 
 
