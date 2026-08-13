@@ -8,6 +8,17 @@ python scripts/keepass_vault.py --config profiles/personal.ini < request.json
 
 Cada processo recebe uma requisição e retorna uma resposta.
 
+## Configuração
+
+Gere e valide o arquivo com a ferramenta fornecida:
+
+```text
+python scripts/config_tool.py init --path C:\\project\\config\\keepass-personal.ini
+python scripts/config_tool.py validate --path C:\\project\\config\\keepass-personal.ini
+```
+
+O comando `init` não sobrescreve arquivos existentes sem `--force`. O comando `validate` exige a seção `[keepass]`, aceita somente `cli_path`, `database_path` e `timeout_seconds`, valida `timeout_seconds` como número maior que zero e confirma que o arquivo KDBX existe.
+
 ## Autenticação
 
 ```json

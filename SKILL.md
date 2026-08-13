@@ -7,6 +7,15 @@ description: Read and modify KeePassXC password vault entries through the bundle
 
 Use `scripts/keepass_vault.py` as the only interface to the vault. Pass one project-specific INI file with `--config` and one JSON request on stdin. The script writes exactly one JSON response to stdout; diagnostic output goes to stderr and never includes secret values.
 
+Use `scripts/config_tool.py` to create and validate configuration files. Always generate a model instead of writing the INI from memory:
+
+```text
+python scripts/config_tool.py init --path C:\\project\\config\\keepass-personal.ini
+python scripts/config_tool.py validate --path C:\\project\\config\\keepass-personal.ini
+```
+
+`init` creates parent directories and refuses to overwrite an existing file unless `--force` is supplied. `validate` returns exit code 0 only when the file has the required section, accepted keys, valid values, and an existing KDBX file.
+
 ## Configuration
 
 Use a separate file for each vault/profile. The script reads only `[keepass]` and ignores other sections:
@@ -18,7 +27,7 @@ database_path = C:\vaults\personal.kdbx
 timeout_seconds = 30
 ```
 
-`cli_path` and `database_path` are required. `timeout_seconds` defaults to 30. Do not put the database password in the INI file.
+`cli_path` and `database_path` are required. `timeout_seconds` defaults to 30. The only accepted keys are `cli_path`, `database_path`, and `timeout_seconds`; unknown keys produce an error. Do not put the database password in the INI file.
 
 ## Request rules
 

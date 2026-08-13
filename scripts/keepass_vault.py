@@ -19,6 +19,7 @@ from typing import Any, Mapping, Sequence
 FIELDS = {"title", "username", "password", "url", "notes"}
 READ_FIELDS = FIELDS | {"totp"}
 UNSUPPORTED = {"clone", "attribute", "attributes", "custom_attribute"}
+CONFIG_KEYS = {"cli_path", "database_path", "timeout_seconds"}
 
 
 class VaultError(Exception):
@@ -52,6 +53,9 @@ def load_settings(path: str) -> Settings:
     if not parser.has_section("keepass"):
         fail("missing_config_section", "O arquivo deve conter a seção [keepass].")
     section = parser["keepass"]
+    unknown = sorted(set(section) - CONFIG_KEYS)
+    if unknown:
+        fail("unknown_config", f"Chaves desconhecidas em [keepass]: {', '.join(unknown)}.")
     cli_path = section.get("cli_path", "").strip()
     database_path = section.get("database_path", "").strip()
     if not cli_path:
