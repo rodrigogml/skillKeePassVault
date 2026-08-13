@@ -1,0 +1,4 @@
+interface:
+  display_name: "KeePass Vault"
+  short_description: "Access KeePassXC vault entries through a secure JSON CLI wrapper"
+  default_prompt: "Use $keepass-vault to read or modify KeePassXC vault entries through the configured secure wrapper."

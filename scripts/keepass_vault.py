@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""Secure, one-request JSON wrapper around keepassxc-cli."""
+
+from __future__ import annotations
+
+import argparse
+import configparser
+import ctypes
+import getpass
+import json
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+FIELDS = {"title", "username", "password", "url", "notes"}
+READ_FIELDS = FIELDS | {"totp"}
+UNSUPPORTED = {"clone", "attribute", "attributes", "custom_attribute"}
+
+
+class VaultError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+@dataclass(frozen=True)
+class Settings:
+    cli_path: str
+    database_path: str
+    timeout_seconds: float
+
+
+def fail(code: str, message: str) -> None:
+    raise VaultError(code, message)
+
+
+def load_settings(path: str) -> Settings:
+    config_path = Path(path)
+    if not config_path.is_file():
+        fail("config_not_found", f"Arquivo de configuração não encontrado: {config_path}")
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            parser.read_file(handle)
+    except (OSError, UnicodeError) as exc:
+        fail("invalid_config", f"Não foi possível ler o arquivo de configuração: {exc.__class__.__name__}")
+    if not parser.has_section("keepass"):
+        fail("missing_config_section", "O arquivo deve conter a seção [keepass].")
+    section = parser["keepass"]
+    cli_path = section.get("cli_path", "").strip()
+    database_path = section.get("database_path", "").strip()
+    if not cli_path:
+        fail("missing_config", "A chave [keepass] cli_path é obrigatória.")
+    if not database_path:
+        fail("missing_config", "A chave [keepass] database_path é obrigatória.")
+    if not Path(database_path).is_file():
+        fail("database_not_found", f"Arquivo KDBX não encontrado: {database_path}")
+    try:
+        timeout = float(section.get("timeout_seconds", "30"))
+    except ValueError:
+        fail("invalid_config", "A chave [keepass] timeout_seconds deve ser numérica.")
+    if timeout <= 0:
+        fail("invalid_config", "A chave [keepass] timeout_seconds deve ser maior que zero.")
+    return Settings(cli_path, database_path, timeout)
+
+
+def read_windows_credential(target: str) -> str:
+    if os.name != "nt":
+        fail("auth_unavailable", "windows_credential_manager só está disponível no Windows.")
+    if not target:
+        fail("invalid_auth", "auth.target é obrigatório para windows_credential_manager.")
+
+    class CREDENTIALW(ctypes.Structure):
+        _fields_ = [
+            ("Flags", ctypes.c_uint32), ("Type", ctypes.c_uint32), ("TargetName", ctypes.c_wchar_p),
+            ("Comment", ctypes.c_wchar_p), ("LastWritten", ctypes.c_byte * 8),
+            ("CredentialBlobSize", ctypes.c_uint32), ("CredentialBlob", ctypes.POINTER(ctypes.c_byte)),
+            ("Persist", ctypes.c_uint32), ("AttributeCount", ctypes.c_uint32), ("Attributes", ctypes.c_void_p),
+            ("TargetAlias", ctypes.c_wchar_p), ("UserName", ctypes.c_wchar_p),
+        ]
+
+    advapi = ctypes.WinDLL("Advapi32.dll")
+    credential = ctypes.POINTER(CREDENTIALW)()
+    if not advapi.CredReadW(target, 1, 0, ctypes.byref(credential)):
+        fail("credential_not_found", "Credencial não encontrada no Windows Credential Manager.")
+    try:
+        item = credential.contents
+        blob = ctypes.string_at(item.CredentialBlob, item.CredentialBlobSize)
+        try:
+            return blob.decode("utf-16-le").rstrip("\x00")
+        except UnicodeDecodeError:
+            return blob.decode("utf-8", errors="strict").rstrip("\x00")
+    finally:
+        advapi.CredFree(credential)
+
+
+def resolve_password(request: Mapping[str, Any]) -> str:
+    auth = request.get("auth")
+    if not isinstance(auth, Mapping):
+        fail("missing_auth", "A chamada deve informar auth.mode.")
+    mode = auth.get("mode")
+    if mode == "stdin":
+        password = auth.get("password")
+        if not isinstance(password, str):
+            fail("invalid_auth", "auth.password é obrigatório para o modo stdin.")
+        return password
+    if mode == "windows_credential_manager":
+        return read_windows_credential(str(auth.get("target", "")))
+    if mode == "prompt":
+        if not sys.stdin.isatty() and not sys.stderr.isatty():
+            fail("auth_unavailable", "O modo prompt exige um terminal interativo.")
+        try:
+            return getpass.getpass("KeePassXC master password: ")
+        except (EOFError, KeyboardInterrupt):
+            fail("auth_cancelled", "A leitura interativa da credencial foi cancelada.")
+    fail("invalid_auth", "auth.mode deve ser stdin, windows_credential_manager ou prompt.")
+
+
+def entry_path(request: Mapping[str, Any], key: str = "entry") -> str:
+    value = request.get(key)
+    if isinstance(value, str):
+        path = value
+    elif isinstance(value, Mapping):
+        path = value.get("path")
+    else:
+        path = None
+    if not isinstance(path, str) or not path.strip():
+        fail("invalid_entry", f"{key}.path é obrigatório.")
+    return path.strip()
+
+
+def field_name(request: Mapping[str, Any], required: bool = True) -> str | None:
+    field = request.get("field")
+    if field is None and not required:
+        return None
+    if not isinstance(field, str) or field not in READ_FIELDS:
+        fail("invalid_field", f"field deve ser um de: {', '.join(sorted(READ_FIELDS))}.")
+    return field
+
+
+class Cli:
+    def __init__(self, settings: Settings, password: str, key_file: str | None = None):
+        self.settings = settings
+        self.password = password
+        self.key_file = key_file
+
+    def command(self, args: Sequence[str], extra_input: str = "") -> str:
+        command = [self.settings.cli_path]
+        if self.key_file:
+            command.extend(["--key-file", self.key_file])
+        command.extend(["--pw-stdin", *args])
+        try:
+            result = subprocess.run(
+                command, input=self.password + "\n" + extra_input, text=True,
+                capture_output=True, timeout=self.settings.timeout_seconds, check=False,
+            )
+        except FileNotFoundError:
+            fail("cli_not_found", "keepassxc-cli não foi encontrado; revise cli_path.")
+        except subprocess.TimeoutExpired:
+            fail("cli_timeout", "keepassxc-cli excedeu o timeout configurado.")
+        except OSError as exc:
+            fail("cli_unavailable", f"Não foi possível executar keepassxc-cli: {exc.__class__.__name__}")
+        if result.returncode != 0:
+            fail("cli_error", "keepassxc-cli recusou a operação; verifique vault, caminho e credenciais.")
+        return result.stdout
+
+    def show(self, path: str, field: str) -> str:
+        if field == "totp":
+            output = self.command(["show", "-t", self.settings.database_path, path])
+            match = re.search(r"(?:TOTP|Current TOTP)\s*:\s*(\S+)", output, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            return lines[-1] if lines else ""
+        options = ["show"]
+        if field == "password":
+            options.append("--show-protected")
+        return self.command([*options, "-a", field, self.settings.database_path, path]).rstrip("\r\n")
+
+    def list_entries(self) -> list[dict[str, Any]]:
+        output = self.command(["ls", "--recursive", "--flatten", self.settings.database_path])
+        entries = []
+        for line in output.splitlines():
+            path = line.strip()
+            if not path or path.endswith("/") or path.lower().startswith("total"):
+                continue
+            detail = self.command(["show", self.settings.database_path, path])
+            uuid_match = re.search(r"\bUUID\s*:\s*([0-9a-fA-F-]{36})", detail)
+            try:
+                self.command(["show", "--totp", self.settings.database_path, path])
+                has_totp = True
+            except VaultError as exc:
+                if exc.code != "cli_error":
+                    raise
+                has_totp = False
+            entries.append({"path": path, "uuid": uuid_match.group(1) if uuid_match else None, "has_totp": has_totp})
+        return entries
+
+    def add_or_edit(self, operation: str, request: Mapping[str, Any]) -> None:
+        path = entry_path(request)
+        fields = request.get("fields")
+        if not isinstance(fields, Mapping) or not fields:
+            fail("invalid_fields", "fields deve conter ao menos um campo padrão.")
+        if set(fields) - FIELDS:
+            fail("unsupported_operation", "Somente campos padrão podem ser escritos.")
+        args = [operation, self.settings.database_path, path]
+        extra = ""
+        if operation == "add" and "title" in fields:
+            fail("unsupported_operation", "add usa o último componente de entry.path como título; --title só é suportado em edit.")
+        for field in ("title", "username", "url", "notes"):
+            if field in fields:
+                args.extend(["--title" if field == "title" else f"--{field}", str(fields[field])])
+        if "password" in fields:
+            args.append("--password-prompt")
+            extra = str(fields["password"]) + "\n"
+        self.command(args, extra)
+
+    def delete(self, request: Mapping[str, Any]) -> None:
+        if request.get("confirm") is not True:
+            fail("confirmation_required", "delete exige confirm=true.")
+        self.command(["rm", self.settings.database_path, entry_path(request)])
+
+
+def handle(request: Mapping[str, Any], settings: Settings) -> dict[str, Any]:
+    operation = request.get("operation")
+    if not isinstance(operation, str):
+        fail("invalid_operation", "operation é obrigatório.")
+    if operation in UNSUPPORTED:
+        fail("unsupported_operation", "Clone e atributos customizados não fazem parte da v1.")
+    password = resolve_password(request)
+    auth = request["auth"]
+    key_file = auth.get("key_file") if isinstance(auth, Mapping) else None
+    cli = Cli(settings, password, key_file if isinstance(key_file, str) else None)
+    if operation == "list":
+        return {"entries": cli.list_entries()}
+    if operation == "read":
+        field = field_name(request)
+        path = entry_path(request)
+        return {"entry": path, "field": field, "value": cli.show(path, field)}
+    if operation in {"add", "edit"}:
+        cli.add_or_edit(operation, request)
+        return {"entry": entry_path(request), "operation": operation, "saved": True}
+    if operation == "delete":
+        cli.delete(request)
+        return {"entry": entry_path(request), "operation": operation, "deleted": True}
+    if operation == "copy":
+        field = field_name(request)
+        source = entry_path(request, "source")
+        destination = entry_path(request, "destination")
+        value = cli.show(source, field)
+        cli.add_or_edit("edit", {"entry": {"path": destination}, "fields": {field: value}})
+        return {"source": source, "destination": destination, "field": field, "copied": True}
+    fail("invalid_operation", "operation deve ser list, read, add, edit, delete ou copy.")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, help="Arquivo INI do perfil KeePassXC")
+    args = parser.parse_args(argv)
+    try:
+        request = json.load(sys.stdin)
+        if not isinstance(request, Mapping):
+            fail("invalid_json", "A requisição JSON deve ser um objeto.")
+        settings = load_settings(args.config)
+        data = handle(request, settings)
+        print(json.dumps({"version": request.get("version", 1), "ok": True, "operation": request.get("operation"), "data": data}, ensure_ascii=False))
+        return 0
+    except json.JSONDecodeError:
+        error = {"code": "invalid_json", "message": "A entrada não contém JSON válido."}
+    except VaultError as exc:
+        error = {"code": exc.code, "message": exc.message}
+    except Exception:
+        error = {"code": "internal_error", "message": "Falha interna ao processar a solicitação."}
+    print(json.dumps({"version": 1, "ok": False, "error": error}, ensure_ascii=False))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
