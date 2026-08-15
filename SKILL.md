@@ -1,6 +1,6 @@
 ---
 name: keepass-vault
-description: Read and modify KeePassXC password vault entries through the bundled secure JSON wrapper. Use when an agent needs to list entry paths, read usernames, passwords, URLs, notes or current TOTP codes, or add, edit, delete and copy standard fields in a configured KDBX vault. Requires a project-specific INI configuration passed to the wrapper. Do not use for cloning entries or custom KeePass attributes, which are unsupported in v1.
+description: Read and modify KeePassXC password vault entries and encrypted attachments through the bundled secure JSON wrapper. Use when an agent needs to list entry paths, read standard fields or current TOTP codes, modify entries, or export, import and remove attachments in a configured KDBX vault. Requires a project-specific INI configuration passed to the wrapper. Do not use for cloning entries or custom KeePass attributes, which are unsupported in v1.
 ---
 
 # KeePass Vault
@@ -31,9 +31,13 @@ timeout_seconds = 30
 
 ## Request rules
 
-Use the contract in [references/contract.md](references/contract.md). The supported operations are `list`, `read`, `add`, `edit`, `delete`, and `copy`. Address entries by their full KeePass group path. Use `confirm: true` for `delete`.
+Use the contract in [references/contract.md](references/contract.md). The supported operations are `list`, `read`, `add`, `edit`, `delete`, `copy`, `attachment.export`, `attachment.import`, and `attachment.delete`. Address entries by their full KeePass group path. Use `confirm: true` for `delete`, attachment import, and attachment deletion.
 
 Supported standard fields are `title`, `username`, `password`, `url`, and `notes`. `totp` is read-only and returns the current code, never the TOTP secret. Clone operations and custom attributes return `unsupported_operation`.
+
+Attachments are addressed by their configured filename and explicit local paths. `attachment.export` writes the bytes to `destination` and returns only metadata and the resolved path; it never returns attachment content in JSON. Existing destinations require `overwrite: true`. `attachment.import` reads `source` into the encrypted KDBX and can use `overwrite: true` to replace an existing attachment. `attachment.delete` removes an attachment from the vault. Import and deletion always require `confirm: true`. Attachment names must be simple filenames without path separators. The installed KeePassXC CLI does not expose a dedicated attachment-list operation, so callers must know the attachment name.
+
+An exported attachment is plaintext on disk even though it is encrypted inside the KDBX. Consumers such as an SSH integration should use a temporary directory, restrict its permissions where supported, avoid logging the contents, and remove the file immediately after use.
 
 Authentication is selected per request with `auth.mode`:
 

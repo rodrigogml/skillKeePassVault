@@ -148,6 +148,20 @@ def field_name(request: Mapping[str, Any], required: bool = True) -> str | None:
     return field
 
 
+def attachment_name(request: Mapping[str, Any]) -> str:
+    name = request.get("attachment", request.get("name"))
+    if not isinstance(name, str) or not name.strip() or "\\" in name or "/" in name or name in {".", ".."}:
+        fail("invalid_attachment", "attachment deve ser um nome simples obrigatório.")
+    return name.strip()
+
+
+def attachment_path(request: Mapping[str, Any], key: str) -> str:
+    value = request.get(key)
+    if not isinstance(value, str) or not value.strip():
+        fail("invalid_path", f"{key} deve ser um caminho obrigatório.")
+    return str(Path(value).resolve())
+
+
 class Cli:
     def __init__(self, settings: Settings, password: str, key_file: str | None = None):
         self.settings = settings
@@ -221,6 +235,29 @@ class Cli:
             extra = str(fields["password"]) + "\n"
         self.command(args, extra)
 
+    def attachment_export(self, request: Mapping[str, Any]) -> None:
+        name = attachment_name(request)
+        destination = attachment_path(request, "destination")
+        target = Path(destination)
+        if target.exists() and request.get("overwrite") is not True:
+            fail("destination_exists", "O destino já existe; use overwrite=true para substituí-lo.")
+        if not target.parent.is_dir():
+            fail("invalid_destination", "A pasta de destino não existe.")
+        self.command(["attachment-export", self.settings.database_path, entry_path(request), name, destination])
+
+    def attachment_import(self, request: Mapping[str, Any]) -> None:
+        name = attachment_name(request)
+        source = attachment_path(request, "source")
+        if not Path(source).is_file():
+            fail("file_not_found", "O arquivo do anexo não foi encontrado.")
+        args = ["attachment-import", self.settings.database_path, entry_path(request), name, source]
+        if request.get("overwrite") is True:
+            args.insert(1, "--force")
+        self.command(args)
+
+    def attachment_delete(self, request: Mapping[str, Any]) -> None:
+        self.command(["attachment-rm", self.settings.database_path, entry_path(request), attachment_name(request)])
+
     def delete(self, request: Mapping[str, Any]) -> None:
         if request.get("confirm") is not True:
             fail("confirmation_required", "delete exige confirm=true.")
@@ -243,6 +280,17 @@ def handle(request: Mapping[str, Any], settings: Settings) -> dict[str, Any]:
         field = field_name(request)
         path = entry_path(request)
         return {"entry": path, "field": field, "value": cli.show(path, field)}
+    if operation in {"attachment.export", "attachment.import", "attachment.delete"}:
+        if operation != "attachment.export" and request.get("confirm") is not True:
+            fail("confirmation_required", "Alterações em anexos exigem confirm=true.")
+        if operation == "attachment.export":
+            cli.attachment_export(request)
+            return {"entry": entry_path(request), "attachment": attachment_name(request), "destination": attachment_path(request, "destination"), "exported": True}
+        if operation == "attachment.import":
+            cli.attachment_import(request)
+            return {"entry": entry_path(request), "attachment": attachment_name(request), "imported": True}
+        cli.attachment_delete(request)
+        return {"entry": entry_path(request), "attachment": attachment_name(request), "deleted": True}
     if operation in {"add", "edit"}:
         cli.add_or_edit(operation, request)
         return {"entry": entry_path(request), "operation": operation, "saved": True}
@@ -258,7 +306,7 @@ def handle(request: Mapping[str, Any], settings: Settings) -> dict[str, Any]:
         value = cli.show(source, field)
         cli.add_or_edit("edit", {"entry": {"path": destination}, "fields": {field: value}})
         return {"source": source, "destination": destination, "field": field, "copied": True}
-    fail("invalid_operation", "operation deve ser list, read, add, edit, delete ou copy.")
+    fail("invalid_operation", "operation deve ser list, read, add, edit, delete, copy ou attachment.*.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

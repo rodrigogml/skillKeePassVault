@@ -55,6 +55,67 @@ class KeepassVaultTests(unittest.TestCase):
         run.assert_not_called()
 
     @patch("keepass_vault.subprocess.run")
+    def test_attachment_export_returns_destination_without_content(self, run):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "id_ed25519"
+            run.return_value = FakeCompleted("")
+            result = handle({"operation": "attachment.export", "entry": {"path": "SSH/server"}, "attachment": "id_ed25519", "destination": str(destination), "auth": {"mode": "stdin", "password": "master"}}, self.settings)
+        self.assertTrue(result["exported"])
+        self.assertEqual(result["destination"], str(destination.resolve()))
+        command = run.call_args.args[0]
+        self.assertIn("attachment-export", command)
+        self.assertNotIn("id_ed25519", run.call_args.kwargs["input"])
+
+    @patch("keepass_vault.subprocess.run")
+    def test_attachment_export_rejects_existing_destination(self, run):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "existing"
+            destination.write_text("do not overwrite", encoding="utf-8")
+            with self.assertRaises(VaultError) as raised:
+                handle({"operation": "attachment.export", "entry": {"path": "SSH/server"}, "attachment": "key", "destination": str(destination), "auth": {"mode": "stdin", "password": "master"}}, self.settings)
+        self.assertEqual(raised.exception.code, "destination_exists")
+        run.assert_not_called()
+
+    @patch("keepass_vault.subprocess.run")
+    def test_attachment_import_requires_confirmation(self, run):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "key"
+            source.write_text("private key", encoding="utf-8")
+            with self.assertRaises(VaultError) as raised:
+                handle({"operation": "attachment.import", "entry": {"path": "SSH/server"}, "attachment": "key", "source": str(source), "auth": {"mode": "stdin", "password": "master"}}, self.settings)
+        self.assertEqual(raised.exception.code, "confirmation_required")
+        run.assert_not_called()
+
+    @patch("keepass_vault.subprocess.run")
+    def test_attachment_import_can_force_replace(self, run):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "key"
+            source.write_text("private key", encoding="utf-8")
+            run.return_value = FakeCompleted("")
+            result = handle({"operation": "attachment.import", "entry": {"path": "SSH/server"}, "attachment": "key", "source": str(source), "overwrite": True, "confirm": True, "auth": {"mode": "stdin", "password": "master"}}, self.settings)
+        self.assertTrue(result["imported"])
+        command = run.call_args.args[0]
+        self.assertIn("--force", command)
+        self.assertIn("attachment-import", command)
+
+    @patch("keepass_vault.subprocess.run")
+    def test_attachment_delete_requires_confirmation_and_calls_cli(self, run):
+        with self.assertRaises(VaultError) as raised:
+            handle({"operation": "attachment.delete", "entry": {"path": "SSH/server"}, "attachment": "key", "auth": {"mode": "stdin", "password": "master"}}, self.settings)
+        self.assertEqual(raised.exception.code, "confirmation_required")
+        run.assert_not_called()
+
+        run.return_value = FakeCompleted("")
+        result = handle({"operation": "attachment.delete", "entry": {"path": "SSH/server"}, "attachment": "key", "confirm": True, "auth": {"mode": "stdin", "password": "master"}}, self.settings)
+        self.assertTrue(result["deleted"])
+        self.assertIn("attachment-rm", run.call_args.args[0])
+
+    def test_attachment_name_rejects_path_traversal(self):
+        with self.assertRaises(VaultError) as raised:
+            handle({"operation": "attachment.export", "entry": {"path": "SSH/server"}, "attachment": "..\\key", "destination": "C:\\temp\\key", "auth": {"mode": "stdin", "password": "master"}}, self.settings)
+        self.assertEqual(raised.exception.code, "invalid_attachment")
+
+    @patch("keepass_vault.subprocess.run")
     def test_copy_reads_source_and_edits_destination(self, run):
         run.side_effect = [FakeCompleted("alice\n"), FakeCompleted("")]
         result = handle({"operation": "copy", "source": {"path": "Old/Example"}, "destination": {"path": "New/Example"}, "field": "username", "auth": {"mode": "stdin", "password": "master"}}, self.settings)

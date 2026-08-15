@@ -69,6 +69,24 @@ Excluir:
 {"version":1,"operation":"delete","entry":{"path":"Finance/Example"},"confirm":true,"auth":{"mode":"stdin","password":"..."}}
 ```
 
+Exportar um anexo sem colocar seus bytes no contexto:
+
+```json
+{"version":1,"operation":"attachment.export","entry":{"path":"SSH/server"},"attachment":"id_ed25519","destination":"C:\\temp\\id_ed25519","auth":{"mode":"windows_credential_manager","target":"Akuma/KeePassXC/KeeVault"}}
+```
+
+Importar ou substituir um anexo:
+
+```json
+{"version":1,"operation":"attachment.import","entry":{"path":"SSH/server"},"attachment":"id_ed25519","source":"C:\\temp\\id_ed25519","overwrite":true,"confirm":true,"auth":{"mode":"windows_credential_manager","target":"Akuma/KeePassXC/KeeVault"}}
+```
+
+Excluir um anexo:
+
+```json
+{"version":1,"operation":"attachment.delete","entry":{"path":"SSH/server"},"attachment":"id_ed25519","confirm":true,"auth":{"mode":"windows_credential_manager","target":"Akuma/KeePassXC/KeeVault"}}
+```
+
 ## Campos
 
 Campos legíveis: `title`, `username`, `password`, `url`, `notes` e `totp`.
@@ -78,6 +96,8 @@ Campos legíveis: `title`, `username`, `password`, `url`, `notes` e `totp`.
 Campos graváveis: `title`, `username`, `password`, `url` e `notes`.
 
 Clone e atributos customizados retornam `unsupported_operation`.
+
+Anexos usam os comandos `attachment-export`, `attachment-import` e `attachment-rm` do `keepassxc-cli`. O nome deve ser simples, sem separadores de diretório. A exportação retorna somente o caminho de destino; os bytes nunca são serializados na resposta. A importação e a exclusão exigem `confirm: true`; a exportação exige `overwrite: true` para substituir um arquivo local existente. O CLI instalado não fornece um comando dedicado para listar anexos, portanto o nome deve ser conhecido pela aplicação consumidora.
 
 ## Erros
 
