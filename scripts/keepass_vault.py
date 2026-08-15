@@ -172,7 +172,7 @@ class Cli:
         command = [self.settings.cli_path]
         if self.key_file:
             command.extend(["--key-file", self.key_file])
-        if args and args[0] in {"add", "edit", "ls", "rm", "show"}:
+        if args and args[0] in {"add", "edit", "ls", "rm", "show", "attachment-export", "attachment-import", "attachment-rm"}:
             command.extend([args[0], "-q", *args[1:]])
         else:
             command.extend(args)
