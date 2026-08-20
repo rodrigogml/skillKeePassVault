@@ -31,9 +31,9 @@ timeout_seconds = 30
 
 ## Request rules
 
-Use the contract in [references/contract.md](references/contract.md). The supported operations are `list`, `read`, `add`, `edit`, `delete`, `copy`, `attachment.export`, `attachment.import`, and `attachment.delete`. Address entries by their full KeePass group path. Use `confirm: true` for `delete`, attachment import, and attachment deletion.
+Use the contract in [references/contract.md](references/contract.md). The supported operations are `list`, `list.totp`, `read`, `add`, `edit`, `delete`, `copy`, `attachment.export`, `attachment.import`, and `attachment.delete`. Address entries by their full KeePass group path. Use `confirm: true` for `delete`, attachment import, and attachment deletion.
 
-Supported standard fields are `title`, `username`, `password`, `url`, and `notes`. `totp` is read-only and returns the current code, never the TOTP secret. Clone operations and custom attributes return `unsupported_operation`.
+Supported standard fields are `title`, `username`, `password`, `url`, and `notes`. `totp` is read-only and returns the current code, never the TOTP secret. Use the `list.totp` operation when only entries with a configured TOTP must be discovered; it returns paths only and never exposes generated codes. Clone operations and custom attributes return `unsupported_operation`.
 
 Attachments are addressed by their configured filename and explicit local paths. `attachment.export` writes the bytes to `destination` and returns only metadata and the resolved path; it never returns attachment content in JSON. Existing destinations require `overwrite: true`. `attachment.import` reads `source` into the encrypted KDBX and can use `overwrite: true` to replace an existing attachment. `attachment.delete` removes an attachment from the vault. Import and deletion always require `confirm: true`. Attachment names must be simple filenames without path separators. The installed KeePassXC CLI does not expose a dedicated attachment-list operation, so callers must know the attachment name.
 

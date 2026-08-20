@@ -4,14 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import configparser
 import ctypes
 import getpass
+import hashlib
+import hmac
 import json
 import os
 import re
 import subprocess
 import sys
+import time
+import urllib.parse
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -63,8 +69,16 @@ def load_settings(path: str) -> Settings:
         fail("missing_config", "A chave [keepass] cli_path é obrigatória.")
     if not database_path:
         fail("missing_config", "A chave [keepass] database_path é obrigatória.")
-    if not Path(database_path).is_file():
+    database = Path(database_path)
+    if not database.is_file():
         fail("database_not_found", f"Arquivo KDBX não encontrado: {database_path}")
+    try:
+        with database.open("rb"):
+            pass
+    except PermissionError:
+        fail("database_access_denied", "O processo não possui permissão de leitura para o arquivo KDBX configurado.")
+    except OSError as exc:
+        fail("database_unavailable", f"Não foi possível abrir o arquivo KDBX configurado: {exc.__class__.__name__}")
     try:
         timeout = float(section.get("timeout_seconds", "30"))
     except ValueError:
@@ -168,7 +182,7 @@ class Cli:
         self.password = password
         self.key_file = key_file
 
-    def command(self, args: Sequence[str], extra_input: str = "") -> str:
+    def command(self, args: Sequence[str], extra_input: str = "", allow_failure: bool = False) -> str | None:
         command = [self.settings.cli_path]
         if self.key_file:
             command.extend(["--key-file", self.key_file])
@@ -187,20 +201,18 @@ class Cli:
             fail("cli_timeout", "keepassxc-cli excedeu o timeout configurado.")
         except OSError as exc:
             fail("cli_unavailable", f"Não foi possível executar keepassxc-cli: {exc.__class__.__name__}")
+        if result.returncode != 0 and allow_failure:
+            return None
         if result.returncode != 0:
             fail("cli_error", "keepassxc-cli recusou a operação; verifique vault, caminho e credenciais.")
         return result.stdout
 
     def show(self, path: str, field: str) -> str:
         if field == "totp":
-            output = self.command(["show", "-t", self.settings.database_path, path])
-            match = re.fullmatch(r"\s*(?:TOTP|Current TOTP)\s*:\s*([0-9A-Z]{5,10})\s*", output, re.IGNORECASE)
-            if match:
-                return match.group(1)
-            match = re.fullmatch(r"\s*([0-9A-Z]{5,10})\s*", output, re.IGNORECASE)
-            if match:
-                return match.group(1)
-            fail("totp_not_found", "Não foi possível identificar um código TOTP na resposta do keepassxc-cli.")
+            uri = self._totp_uris().get(path)
+            if uri is None:
+                fail("totp_not_found", "A entrada não possui um TOTP configurado.")
+            return self._current_totp(uri)
         options = ["show"]
         if field == "password":
             options.append("--show-protected")
@@ -215,6 +227,55 @@ class Cli:
                 continue
             entries.append({"path": path, "uuid": None, "has_totp": None})
         return entries
+
+    def list_totp_entries(self) -> list[dict[str, Any]]:
+        return [{"path": path, "uuid": None, "has_totp": True} for path in self._totp_uris()]
+
+    def _totp_uris(self) -> dict[str, str]:
+        output = self.command(["export", "-q", "--format", "xml", self.settings.database_path])
+        assert output is not None
+        try:
+            root = ET.fromstring(output)
+        except ET.ParseError:
+            fail("cli_error", "keepassxc-cli retornou uma exportação XML inválida.")
+        root_group = root.find("./Root/Group")
+        if root_group is None:
+            fail("cli_error", "A exportação XML não contém o grupo raiz do vault.")
+        result: dict[str, str] = {}
+
+        def walk(group: ET.Element, prefix: str) -> None:
+            for entry in group.findall("Entry"):
+                fields = {item.findtext("Key"): item.findtext("Value", "") for item in entry.findall("String")}
+                title, otp = fields.get("Title"), fields.get("otp")
+                if title and otp:
+                    result["/".join(part for part in (prefix, title) if part)] = otp
+            for child in group.findall("Group"):
+                name = child.findtext("Name", "")
+                walk(child, "/".join(part for part in (prefix, name) if part))
+
+        walk(root_group, "")
+        return result
+
+    @staticmethod
+    def _current_totp(uri: str) -> str:
+        parsed = urllib.parse.urlsplit(uri)
+        parameters = urllib.parse.parse_qs(parsed.query)
+        secret = parameters.get("secret", [""])[0].replace(" ", "").upper()
+        algorithm = parameters.get("algorithm", ["SHA1"])[0].upper()
+        try:
+            digits = int(parameters.get("digits", ["6"])[0])
+            period = int(parameters.get("period", ["30"])[0])
+            key = base64.b32decode(secret + "=" * (-len(secret) % 8), casefold=True)
+            digest = getattr(hashlib, algorithm.lower())
+        except (AttributeError, ValueError, base64.binascii.Error):
+            fail("invalid_totp", "A configuração TOTP da entrada é inválida.")
+        if parsed.scheme.lower() != "otpauth" or parsed.netloc.lower() != "totp" or not key or digits not in {6, 7, 8} or period <= 0:
+            fail("invalid_totp", "A configuração TOTP da entrada é inválida.")
+        counter = int(time.time()) // period
+        digest_bytes = hmac.new(key, counter.to_bytes(8, "big"), digest).digest()
+        offset = digest_bytes[-1] & 0x0F
+        value = int.from_bytes(digest_bytes[offset:offset + 4], "big") & 0x7FFFFFFF
+        return str(value % (10 ** digits)).zfill(digits)
 
     def add_or_edit(self, operation: str, request: Mapping[str, Any]) -> None:
         path = entry_path(request)
@@ -276,6 +337,8 @@ def handle(request: Mapping[str, Any], settings: Settings) -> dict[str, Any]:
     cli = Cli(settings, password, key_file if isinstance(key_file, str) else None)
     if operation == "list":
         return {"entries": cli.list_entries()}
+    if operation == "list.totp":
+        return {"entries": cli.list_totp_entries()}
     if operation == "read":
         field = field_name(request)
         path = entry_path(request)
@@ -306,7 +369,7 @@ def handle(request: Mapping[str, Any], settings: Settings) -> dict[str, Any]:
         value = cli.show(source, field)
         cli.add_or_edit("edit", {"entry": {"path": destination}, "fields": {field: value}})
         return {"source": source, "destination": destination, "field": field, "copied": True}
-    fail("invalid_operation", "operation deve ser list, read, add, edit, delete, copy ou attachment.*.")
+    fail("invalid_operation", "operation deve ser list, list.totp, read, add, edit, delete, copy ou attachment.*.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -45,6 +45,12 @@ Listar:
 {"version":1,"operation":"list","auth":{"mode":"stdin","password":"..."}}
 ```
 
+Listar somente entradas que possuem TOTP, sem retornar o código nem o segredo:
+
+```json
+{"version":1,"operation":"list.totp","auth":{"mode":"stdin","password":"..."}}
+```
+
 Ler senha:
 
 ```json
@@ -91,7 +97,7 @@ Excluir um anexo:
 
 Campos legíveis: `title`, `username`, `password`, `url`, `notes` e `totp`.
 
-`totp` retorna somente o código corrente. A chave TOTP nunca é retornada.
+`totp` retorna somente o código corrente. A chave TOTP nunca é retornada. A operação `list.totp` retorna somente os caminhos das entradas para as quais o KeePassXC produz um TOTP; o código gerado durante a verificação é descartado pelo wrapper.
 
 Campos graváveis: `title`, `username`, `password`, `url` e `notes`.
 
@@ -101,4 +107,4 @@ Anexos usam os comandos `attachment-export`, `attachment-import` e `attachment-r
 
 ## Erros
 
-Erros possuem `ok: false`, `error.code` estável e `error.message` descritiva. Nunca incluem valores secretos nem a saída bruta do KeePassXC.
+Erros possuem `ok: false`, `error.code` estável e `error.message` descritiva. Nunca incluem valores secretos nem a saída bruta do KeePassXC. Quando o processo não puder abrir o KDBX antes de invocar o KeePassXC, o wrapper retorna `database_access_denied` para ausência de leitura ou `database_unavailable` para outra falha de abertura.

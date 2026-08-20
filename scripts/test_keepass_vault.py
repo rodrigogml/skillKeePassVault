@@ -47,6 +47,13 @@ class KeepassVaultTests(unittest.TestCase):
         command = run.call_args_list[0].args[0]
         self.assertEqual(command[1:5], ["ls", "-q", "-R", "-f"])
 
+    @patch("keepass_vault.Cli.command")
+    def test_list_totp_returns_only_entries_with_an_otp_field(self, command):
+        command.return_value = """<KeePassFile><Root><Group><Name>Root</Name><Entry><String><Key>Title</Key><Value>With TOTP</Value></String><String><Key>otp</Key><Value>otpauth://totp/a?secret=JBSWY3DPEHPK3PXP</Value></String></Entry><Entry><String><Key>Title</Key><Value>Without TOTP</Value></String></Entry><Group><Name>Mail</Name><Entry><String><Key>Title</Key><Value>Nested</Value></String><String><Key>otp</Key><Value>otpauth://totp/b?secret=JBSWY3DPEHPK3PXP</Value></String></Entry></Group></Group></Root></KeePassFile>"""
+        result = handle({"operation": "list.totp", "auth": {"mode": "stdin", "password": "master"}}, self.settings)
+        self.assertEqual(result["entries"], [{"path": "With TOTP", "uuid": None, "has_totp": True}, {"path": "Mail/Nested", "uuid": None, "has_totp": True}])
+        self.assertEqual(command.call_args.args[0], ["export", "-q", "--format", "xml", "vault.kdbx"])
+
     @patch("keepass_vault.subprocess.run")
     def test_delete_requires_confirmation(self, run):
         with self.assertRaises(VaultError) as raised:
@@ -135,15 +142,14 @@ class KeepassVaultTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "invalid_field")
         run.assert_not_called()
 
-    @patch("keepass_vault.Cli.command")
-    def test_totp_returns_only_a_validated_code(self, command):
-        command.return_value = "Current TOTP: 123456\n"
+    @patch("keepass_vault.time.time", return_value=59)
+    @patch("keepass_vault.Cli._totp_uris", return_value={"Mail/Example": "otpauth://totp/example?secret=JBSWY3DPEHPK3PXP"})
+    def test_totp_returns_a_code_derived_from_the_entry_uri(self, _uris, _time):
         result = Cli(self.settings, "master").show("Mail/Example", "totp")
-        self.assertEqual(result, "123456")
+        self.assertEqual(result, "996554")
 
-    @patch("keepass_vault.Cli.command")
-    def test_totp_rejects_an_unrecognised_cli_response(self, command):
-        command.return_value = "Title: Example\nUsername: alice\n"
+    @patch("keepass_vault.Cli._totp_uris", return_value={})
+    def test_totp_rejects_an_entry_without_otp(self, _uris):
         with self.assertRaises(VaultError) as raised:
             Cli(self.settings, "master").show("Mail/Example", "totp")
         self.assertEqual(raised.exception.code, "totp_not_found")
@@ -172,6 +178,22 @@ class KeepassVaultTests(unittest.TestCase):
             settings = load_settings(str(config))
             self.assertEqual(settings.cli_path, "cli")
             self.assertEqual(settings.database_path, str(database))
+
+    def test_config_reports_database_read_access_denied(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "profile.ini"
+            database = Path(directory) / "vault.kdbx"
+            database.write_bytes(b"test")
+            config.write_text(f"[keepass]\ncli_path = cli\ndatabase_path = {database}\n", encoding="utf-8")
+            original_open = Path.open
+            def open_path(path, *args, **kwargs):
+                if path == database:
+                    raise PermissionError
+                return original_open(path, *args, **kwargs)
+            with patch.object(Path, "open", new=open_path):
+                with self.assertRaises(VaultError) as raised:
+                    load_settings(str(config))
+        self.assertEqual(raised.exception.code, "database_access_denied")
 
 
 if __name__ == "__main__":
