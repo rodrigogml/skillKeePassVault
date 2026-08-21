@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -194,6 +195,28 @@ class KeepassVaultTests(unittest.TestCase):
                 with self.assertRaises(VaultError) as raised:
                     load_settings(str(config))
         self.assertEqual(raised.exception.code, "database_access_denied")
+
+    def test_read_only_environment_rejects_vault_mutation(self):
+        request = {"operation": "edit", "entry": {"path": "Mail/Example"}, "fields": {"username": "alice"}}
+        with patch.dict(os.environ, {"KEEPASS_VAULT_ACCESS": "read_only"}, clear=False):
+            with self.assertRaises(VaultError) as raised:
+                handle(request, self.settings)
+        self.assertEqual(raised.exception.code, "access_denied")
+
+    @patch("keepass_vault.read_windows_credential", return_value="master")
+    @patch("keepass_vault.subprocess.run")
+    def test_authentication_can_default_to_neutral_environment(self, run, credential):
+        run.return_value = FakeCompleted("alice\n")
+        environment = {
+            "KEEPASS_VAULT_ACCESS": "read_only",
+            "KEEPASS_VAULT_AUTH_MODE": "windows_credential_manager",
+            "KEEPASS_VAULT_AUTH_TARGET": "bot-vault",
+        }
+        request = {"operation": "read", "entry": {"path": "Mail/Example"}, "field": "username"}
+        with patch.dict(os.environ, environment, clear=False):
+            result = handle(request, self.settings)
+        self.assertEqual(result["value"], "alice")
+        credential.assert_called_once_with("bot-vault")
 
 
 if __name__ == "__main__":

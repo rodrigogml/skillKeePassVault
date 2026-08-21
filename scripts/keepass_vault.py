@@ -27,6 +27,7 @@ READ_FIELDS = FIELDS | {"totp"}
 CONTRACT_VERSION = 1
 UNSUPPORTED = {"clone", "attribute", "attributes", "custom_attribute"}
 CONFIG_KEYS = {"cli_path", "database_path", "timeout_seconds"}
+READ_ONLY_OPERATIONS = {"list", "list.totp", "read", "attachment.export"}
 
 
 class VaultError(Exception):
@@ -121,7 +122,12 @@ def read_windows_credential(target: str) -> str:
 def resolve_password(request: Mapping[str, Any]) -> str:
     auth = request.get("auth")
     if not isinstance(auth, Mapping):
-        fail("missing_auth", "A chamada deve informar auth.mode.")
+        mode = os.environ.get("KEEPASS_VAULT_AUTH_MODE", "").strip()
+        target = os.environ.get("KEEPASS_VAULT_AUTH_TARGET", "").strip()
+        if mode:
+            auth = {"mode": mode, "target": target}
+        else:
+            fail("missing_auth", "A chamada deve informar auth.mode.")
     mode = auth.get("mode")
     if mode == "stdin":
         password = auth.get("password")
@@ -331,8 +337,13 @@ def handle(request: Mapping[str, Any], settings: Settings) -> dict[str, Any]:
         fail("invalid_operation", "operation é obrigatório.")
     if operation in UNSUPPORTED:
         fail("unsupported_operation", "Clone e atributos customizados não fazem parte da v1.")
+    access = os.environ.get("KEEPASS_VAULT_ACCESS", "").strip().casefold()
+    if access and access not in {"read_only", "read_write"}:
+        fail("invalid_access", "KEEPASS_VAULT_ACCESS deve ser read_only ou read_write.")
+    if access == "read_only" and operation not in READ_ONLY_OPERATIONS:
+        fail("access_denied", "A operação não é permitida por KEEPASS_VAULT_ACCESS=read_only.")
     password = resolve_password(request)
-    auth = request["auth"]
+    auth = request.get("auth")
     key_file = auth.get("key_file") if isinstance(auth, Mapping) else None
     cli = Cli(settings, password, key_file if isinstance(key_file, str) else None)
     if operation == "list":

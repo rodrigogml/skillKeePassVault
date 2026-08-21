@@ -16,6 +16,8 @@ python scripts/config_tool.py validate --path C:\\project\\config\\keepass-perso
 
 `init` creates parent directories and refuses to overwrite an existing file unless `--force` is supplied. `validate` returns exit code 0 only when the file has the required section, accepted keys, valid values, and an existing KDBX file.
 
+When an integrating host defines `KEEPASS_VAULT_CONFIG`, treat its value as the default project-specific INI and still pass that path explicitly through `--config`. The optional host variables `KEEPASS_VAULT_AUTH_MODE` and `KEEPASS_VAULT_AUTH_TARGET` select the default request authentication without containing a password. `KEEPASS_VAULT_ACCESS`, when set to `read_only`, means the caller must use only `list`, `list.totp`, `read` and `attachment.export`; the wrapper rejects all operations that mutate the Vault, including `copy`. When set to `read_write`, all supported operations remain available. Explicit user instructions may select another readable profile, but never infer or reuse a profile from an unrelated project.
+
 ## Configuration
 
 Use a separate file for each vault/profile. The script reads only `[keepass]` and ignores other sections:
